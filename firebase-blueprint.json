@@ -1,0 +1,228 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Storefront garment SKU supporting Ready-to-Wear, Bespoke, or Hybrid fulfillment across Josy Textile categories 01-09.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sku": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "categoryCode": { "type": "string", "enum": ["01", "02", "03", "04", "05", "06", "07", "08", "09"] },
+        "categoryName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "fulfillmentMode": { "type": "string", "enum": ["RTW_ONLY", "BESPOKE_ONLY", "HYBRID"] },
+        "priceNGN": { "type": "number" },
+        "bespokeSurchargeNGN": { "type": "number" },
+        "image": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "secondaryImage": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": "string", "minLength": 10, "maxLength": 1200 },
+        "craftDetails": { "type": "array" },
+        "swatches": { "type": "array" },
+        "cutOptions": { "type": "array" },
+        "stockBySize": { "type": "object" },
+        "modelNote": { "type": "string", "maxLength": 240 },
+        "isSpotlight": { "type": "boolean" },
+        "isNewArrival": { "type": "boolean" },
+        "soldOutOverride": { "type": "boolean" },
+        "filterGroups": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "sku",
+        "name",
+        "categoryCode",
+        "categoryName",
+        "fulfillmentMode",
+        "priceNGN",
+        "bespokeSurchargeNGN",
+        "image",
+        "secondaryImage",
+        "description",
+        "craftDetails",
+        "swatches",
+        "cutOptions",
+        "stockBySize",
+        "modelNote",
+        "filterGroups",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Global atelier capacity and split deposit configuration managed by Josy Textile admins.",
+      "type": "object",
+      "properties": {
+        "bespokeCapacityOpen": { "type": "boolean" },
+        "splitDepositEnabled": { "type": "boolean" },
+        "bespokeLeadWindow": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bespokeCapacityOpen", "splitDepositEnabled", "bespokeLeadWindow", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private customer account record storing wishlist references and display identity (no self-assigned roles).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 6, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 180 },
+        "wishlistIds": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "wishlistIds", "createdAt", "updatedAt"]
+    },
+    "MeasurementProfile": {
+      "title": "MeasurementProfile",
+      "description": "Private saved body measurement profile owned by a customer for one-click bespoke tailoring.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 6, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "unit": { "type": "string", "enum": ["in", "cm"] },
+        "measurements": { "type": "object" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "unit", "measurements", "notes", "createdAt", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Split-fulfillment RTW and Bespoke order with production pipeline status, split deposit tracking, and milestone notifications.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 4, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerUid": { "type": "string", "minLength": 6, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "customerEmail": { "type": "string", "format": "email", "maxLength": 180 },
+        "customerPhone": { "type": "string", "minLength": 6, "maxLength": 40 },
+        "whatsappOptIn": { "type": "boolean" },
+        "deliveryAddress": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "shippingZone": { "type": "object" },
+        "currency": { "type": "string", "enum": ["NGN", "USD", "GBP", "EUR"] },
+        "paymentGateway": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "paymentPlan": { "type": "string", "enum": ["FULL_UPFRONT", "SPLIT_DEPOSIT_60_40"] },
+        "rtwItems": { "type": "array" },
+        "bespokeItems": { "type": "array" },
+        "subtotalNGN": { "type": "number" },
+        "shippingNGN": { "type": "number" },
+        "totalNGN": { "type": "number" },
+        "amountPaidNGN": { "type": "number" },
+        "balanceDueNGN": { "type": "number" },
+        "balanceSettled": { "type": "boolean" },
+        "rtwStage": { "type": "string", "enum": ["NONE", "Order Confirmed", "Packed", "Dispatched", "Delivered"] },
+        "rtwTrackingCode": { "type": "string", "maxLength": 80 },
+        "bespokeStage": { "type": "string", "enum": ["NONE", "Measurements Confirmed", "Fabric Cutting", "Sewing & Construction", "Finishing & Quality Check", "Dispatched", "Delivered"] },
+        "bespokeTrackingCode": { "type": "string", "maxLength": 80 },
+        "targetCompletionDate": { "type": "string", "minLength": 8, "maxLength": 32 },
+        "notifications": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "customerUid",
+        "customerName",
+        "customerEmail",
+        "customerPhone",
+        "whatsappOptIn",
+        "deliveryAddress",
+        "shippingZone",
+        "currency",
+        "paymentGateway",
+        "paymentPlan",
+        "rtwItems",
+        "bespokeItems",
+        "subtotalNGN",
+        "shippingNGN",
+        "totalNGN",
+        "amountPaidNGN",
+        "balanceDueNGN",
+        "balanceSettled",
+        "rtwStage",
+        "rtwTrackingCode",
+        "bespokeStage",
+        "bespokeTrackingCode",
+        "targetCompletionDate",
+        "notifications",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "NewsletterSubscriber": {
+      "title": "NewsletterSubscriber",
+      "description": "Drop alert newsletter subscription tied to authenticated user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 6, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 180 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "ContactInquiry": {
+      "title": "ContactInquiry",
+      "description": "Studio consultation or tailoring inquiry sent to Isoko Road headquarters.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 6, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 180 },
+        "subject": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "message": { "type": "string", "minLength": 5, "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "subject", "message", "createdAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Server-provisioned RBAC marker identifying authorized Josy Textile workshop admins.",
+      "type": "object",
+      "properties": {
+        "grantedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["grantedBy", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Publicly readable product catalog across categories 01-09; admin-only writes."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/StoreSettings" },
+      "description": "Publicly readable atelier capacity & split-deposit settings; admin-only writes."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private customer profile & wishlist; strictly owner or admin read/write."
+    },
+    "/users/{userId}/measurementProfiles/{profileId}": {
+      "schema": { "$ref": "#/entities/MeasurementProfile" },
+      "description": "Private customer body measurement profiles; master-gated to parent user owner or admin."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer RTW and Bespoke orders with PII isolation, action-based updates, and terminal state locking."
+    },
+    "/newsletterSubscribers/{subscriberId}": {
+      "schema": { "$ref": "#/entities/NewsletterSubscriber" },
+      "description": "Private drop alert email subscriptions."
+    },
+    "/contactInquiries/{inquiryId}": {
+      "schema": { "$ref": "#/entities/ContactInquiry" },
+      "description": "Private studio consultation messages."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Immutable client-side RBAC admin lookup collection."
+    }
+  }
+}

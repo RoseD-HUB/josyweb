@@ -1,0 +1,6 @@
+{
+  "name": "Josy Textile",
+  "description": "Authentic African textiles, modern ready-to-wear apparel, and luxury Nigerian tailoring crafted in Ughelli, Delta State and shipped worldwide.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

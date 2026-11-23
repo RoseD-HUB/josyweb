@@ -1,0 +1,411 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 0: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Global Hardened Primitives
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'diamondroseline4@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // =========================================================================
+    // Validation Blueprints (Anti-Update-Gap)
+    // =========================================================================
+    function isValidStockMap(stock) {
+      return stock is map
+        && stock.keys().hasAll(['S', 'M', 'L', 'XL', '2XL', '3XL'])
+        && stock.keys().hasOnly(['S', 'M', 'L', 'XL', '2XL', '3XL'])
+        && stock.S is int && stock.S >= 0 && stock.S <= 10000
+        && stock.M is int && stock.M >= 0 && stock.M <= 10000
+        && stock.L is int && stock.L >= 0 && stock.L <= 10000
+        && stock.XL is int && stock.XL >= 0 && stock.XL <= 10000
+        && stock['2XL'] is int && stock['2XL'] >= 0 && stock['2XL'] <= 10000
+        && stock['3XL'] is int && stock['3XL'] >= 0 && stock['3XL'] <= 10000;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll([
+          'id', 'sku', 'name', 'categoryCode', 'categoryName', 'fulfillmentMode',
+          'priceNGN', 'bespokeSurchargeNGN', 'image', 'secondaryImage', 'description',
+          'craftDetails', 'swatches', 'cutOptions', 'stockBySize', 'modelNote',
+          'filterGroups', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'sku', 'name', 'categoryCode', 'categoryName', 'fulfillmentMode',
+          'priceNGN', 'bespokeSurchargeNGN', 'image', 'secondaryImage', 'description',
+          'craftDetails', 'swatches', 'cutOptions', 'stockBySize', 'modelNote',
+          'isSpotlight', 'isNewArrival', 'soldOutOverride', 'filterGroups',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.sku is string && data.sku.size() >= 2 && data.sku.size() <= 40
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 140
+        && data.categoryCode in ['01', '02', '03', '04', '05', '06', '07', '08', '09']
+        && data.categoryName is string && data.categoryName.size() >= 2 && data.categoryName.size() <= 100
+        && data.fulfillmentMode in ['RTW_ONLY', 'BESPOKE_ONLY', 'HYBRID']
+        && data.priceNGN is number && data.priceNGN >= 0 && data.priceNGN <= 50000000
+        && data.bespokeSurchargeNGN is number && data.bespokeSurchargeNGN >= 0 && data.bespokeSurchargeNGN <= 10000000
+        && data.image is string && data.image.size() >= 1 && data.image.size() <= 300
+        && data.secondaryImage is string && data.secondaryImage.size() >= 1 && data.secondaryImage.size() <= 300
+        && data.description is string && data.description.size() >= 10 && data.description.size() <= 1200
+        && data.craftDetails is list && data.craftDetails.size() <= 10
+        && (data.craftDetails.size() == 0 || data.craftDetails[0] is string)
+        && data.swatches is list && data.swatches.size() >= 1 && data.swatches.size() <= 10
+        && data.swatches[0] is map
+        && data.cutOptions is list && data.cutOptions.size() >= 1 && data.cutOptions.size() <= 10
+        && data.cutOptions[0] is string
+        && isValidStockMap(data.stockBySize)
+        && data.modelNote is string && data.modelNote.size() <= 240
+        && (!('isSpotlight' in data) || data.isSpotlight is bool)
+        && (!('isNewArrival' in data) || data.isNewArrival is bool)
+        && (!('soldOutOverride' in data) || data.soldOutOverride is bool)
+        && data.filterGroups is list && data.filterGroups.size() >= 1 && data.filterGroups.size() <= 6
+        && data.filterGroups[0] is string
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStoreSettings(data) {
+      return data.keys().hasAll(['bespokeCapacityOpen', 'splitDepositEnabled', 'bespokeLeadWindow', 'updatedAt'])
+        && data.keys().hasOnly(['bespokeCapacityOpen', 'splitDepositEnabled', 'bespokeLeadWindow', 'updatedAt'])
+        && data.bespokeCapacityOpen is bool
+        && data.splitDepositEnabled is bool
+        && data.bespokeLeadWindow is string && data.bespokeLeadWindow.size() >= 3 && data.bespokeLeadWindow.size() <= 80
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'wishlistIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'wishlistIds', 'createdAt', 'updatedAt'])
+        && data.uid == userId
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 180
+        && data.wishlistIds is list && data.wishlistIds.size() <= 50
+        && (data.wishlistIds.size() == 0 || data.wishlistIds[0] is string)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBodyMeasurements(m) {
+      return m is map
+        && m.keys().hasAll([
+          'chestBust', 'waist', 'hips', 'shoulderWidth', 'sleeveLength',
+          'neck', 'trouserInseam', 'trouserOutseam', 'garmentLength'
+        ])
+        && m.keys().hasOnly([
+          'chestBust', 'waist', 'hips', 'shoulderWidth', 'sleeveLength',
+          'neck', 'trouserInseam', 'trouserOutseam', 'garmentLength'
+        ])
+        && m.chestBust is number && m.chestBust >= 15 && m.chestBust <= 90
+        && m.waist is number && m.waist >= 15 && m.waist <= 90
+        && m.hips is number && m.hips >= 15 && m.hips <= 95
+        && m.shoulderWidth is number && m.shoulderWidth >= 10 && m.shoulderWidth <= 40
+        && m.sleeveLength is number && m.sleeveLength >= 10 && m.sleeveLength <= 45
+        && m.neck is number && m.neck >= 10 && m.neck <= 30
+        && m.trouserInseam is number && m.trouserInseam >= 15 && m.trouserInseam <= 50
+        && m.trouserOutseam is number && m.trouserOutseam >= 20 && m.trouserOutseam <= 65
+        && m.garmentLength is number && m.garmentLength >= 15 && m.garmentLength <= 75;
+    }
+
+    function isValidMeasurementProfile(data, userId) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'unit', 'measurements', 'notes', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'name', 'unit', 'measurements', 'notes', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && isValidId(data.ownerId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 80
+        && data.unit in ['in', 'cm']
+        && isValidBodyMeasurements(data.measurements)
+        && data.notes is string && data.notes.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'id', 'customerUid', 'customerName', 'customerEmail', 'customerPhone',
+          'whatsappOptIn', 'deliveryAddress', 'shippingZone', 'currency',
+          'paymentGateway', 'paymentPlan', 'rtwItems', 'bespokeItems',
+          'subtotalNGN', 'shippingNGN', 'totalNGN', 'amountPaidNGN',
+          'balanceDueNGN', 'balanceSettled', 'rtwStage', 'rtwTrackingCode',
+          'bespokeStage', 'bespokeTrackingCode', 'targetCompletionDate',
+          'notifications', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'customerUid', 'customerName', 'customerEmail', 'customerPhone',
+          'whatsappOptIn', 'deliveryAddress', 'shippingZone', 'currency',
+          'paymentGateway', 'paymentPlan', 'rtwItems', 'bespokeItems',
+          'subtotalNGN', 'shippingNGN', 'totalNGN', 'amountPaidNGN',
+          'balanceDueNGN', 'balanceSettled', 'rtwStage', 'rtwTrackingCode',
+          'bespokeStage', 'bespokeTrackingCode', 'targetCompletionDate',
+          'notifications', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.customerUid)
+        && data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120
+        && data.customerEmail is string && data.customerEmail.size() >= 3 && data.customerEmail.size() <= 180
+        && data.customerPhone is string && data.customerPhone.size() >= 6 && data.customerPhone.size() <= 40
+        && data.whatsappOptIn is bool
+        && data.deliveryAddress is string && data.deliveryAddress.size() >= 4 && data.deliveryAddress.size() <= 300
+        && data.shippingZone is map
+        && data.currency in ['NGN', 'USD', 'GBP', 'EUR']
+        && data.paymentGateway is string && data.paymentGateway.size() >= 3 && data.paymentGateway.size() <= 80
+        && data.paymentPlan in ['FULL_UPFRONT', 'SPLIT_DEPOSIT_60_40']
+        && data.rtwItems is list && data.rtwItems.size() <= 20
+        && (data.rtwItems.size() == 0 || data.rtwItems[0] is map)
+        && data.bespokeItems is list && data.bespokeItems.size() <= 10
+        && (data.bespokeItems.size() == 0 || data.bespokeItems[0] is map)
+        && (data.rtwItems.size() + data.bespokeItems.size()) >= 1
+        && data.subtotalNGN is number && data.subtotalNGN >= 0 && data.subtotalNGN <= 500000000
+        && data.shippingNGN is number && data.shippingNGN >= 0 && data.shippingNGN <= 5000000
+        && data.totalNGN is number && data.totalNGN >= 0 && data.totalNGN <= 505000000
+        && data.amountPaidNGN is number && data.amountPaidNGN >= 0 && data.amountPaidNGN <= data.totalNGN
+        && data.balanceDueNGN is number && data.balanceDueNGN >= 0 && data.balanceDueNGN <= data.totalNGN
+        && (data.amountPaidNGN + data.balanceDueNGN) == data.totalNGN
+        && data.balanceSettled is bool
+        && data.rtwStage in ['NONE', 'Order Confirmed', 'Packed', 'Dispatched', 'Delivered']
+        && data.rtwTrackingCode is string && data.rtwTrackingCode.size() <= 80
+        && data.bespokeStage in [
+          'NONE', 'Measurements Confirmed', 'Fabric Cutting', 'Sewing & Construction',
+          'Finishing & Quality Check', 'Dispatched', 'Delivered'
+        ]
+        && data.bespokeTrackingCode is string && data.bespokeTrackingCode.size() <= 80
+        && data.targetCompletionDate is string && data.targetCompletionDate.size() >= 8 && data.targetCompletionDate.size() <= 32
+        && data.notifications is list && data.notifications.size() >= 1 && data.notifications.size() <= 30
+        && data.notifications[0] is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isOrderTerminal(data) {
+      return (data.rtwStage == 'NONE' || data.rtwStage == 'Delivered')
+        && (data.bespokeStage == 'NONE' || data.bespokeStage == 'Delivered')
+        && data.balanceSettled == true;
+    }
+
+    function isValidSubscriber(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 180
+        && data.createdAt is timestamp;
+    }
+
+    function isValidInquiry(data) {
+      return data.keys().hasAll(['uid', 'name', 'email', 'subject', 'message', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'name', 'email', 'subject', 'message', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 180
+        && data.subject is string && data.subject.size() >= 2 && data.subject.size() <= 160
+        && data.message is string && data.message.size() >= 5 && data.message.size() <= 2000
+        && data.createdAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection Rules
+    // =========================================================================
+
+    // 1. Public Storefront Product Catalog (Zero PII)
+    match /products/{productId} {
+      allow get: if isValidId(productId);
+      allow list: if resource.data.categoryCode in ['01', '02', '03', '04', '05', '06', '07', '08', '09'];
+      allow create: if isVerifiedUser()
+        && isValidId(productId)
+        && isValidProduct(incoming())
+        && incoming().id == productId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isVerifiedUser()
+        && isValidId(productId)
+        && isValidProduct(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow delete: if isVerifiedUser() && isValidId(productId) && isAdmin();
+    }
+
+    // 2. Store Capacity & Split-Deposit Settings (Zero PII)
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'store';
+      allow create: if isVerifiedUser()
+        && isValidId(settingId)
+        && settingId == 'store'
+        && isValidStoreSettings(incoming())
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isVerifiedUser()
+        && isValidId(settingId)
+        && settingId == 'store'
+        && isValidStoreSettings(incoming())
+        && incoming().updatedAt == request.time
+        && isAdmin();
+    }
+
+    // 3. Private Customer Profiles & Measurement Subcollection
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'wishlistIds', 'updatedAt']))
+        );
+
+      // Master-Gated Private Measurement Profiles
+      match /measurementProfiles/{profileId} {
+        allow get: if isValidId(userId) && isValidId(profileId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin());
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(profileId)
+          && isValidMeasurementProfile(incoming(), userId)
+          && incoming().id == profileId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (isOwner(userId) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(profileId)
+          && isValidMeasurementProfile(incoming(), userId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isAdmin() ||
+            (isOwner(userId)
+              && exists(/databases/$(database)/documents/users/$(userId))
+              && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'unit', 'measurements', 'notes', 'updatedAt']))
+          );
+        allow delete: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(profileId)
+          && (isOwner(userId) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+    }
+
+    // 4. Split-Fulfillment RTW & Bespoke Orders (Strict PII Isolation & Action-Based Updates)
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (existing().customerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.customerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isVerifiedUser()
+        && isValidId(orderId)
+        && isValidOrder(incoming())
+        && incoming().id == orderId
+        && incoming().customerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (incoming().rtwItems.size() == 0 ? incoming().rtwStage == 'NONE' : incoming().rtwStage == 'Order Confirmed')
+        && (incoming().bespokeItems.size() == 0 ? incoming().bespokeStage == 'NONE' : incoming().bespokeStage == 'Measurements Confirmed');
+      allow update: if isVerifiedUser()
+        && isValidId(orderId)
+        && isValidOrder(incoming())
+        && incoming().id == existing().id
+        && incoming().customerUid == existing().customerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            !isOrderTerminal(existing())
+            && existing().customerUid == request.auth.uid
+            && (
+              // Action 1: Customer settles 40% bespoke balance upon Finishing & Quality Check
+              (
+                existing().balanceSettled == false
+                && existing().bespokeStage == 'Finishing & Quality Check'
+                && incoming().diff(existing()).affectedKeys().hasOnly(['balanceSettled', 'amountPaidNGN', 'balanceDueNGN', 'notifications', 'updatedAt'])
+                && incoming().balanceSettled == true
+                && incoming().balanceDueNGN == 0
+                && incoming().amountPaidNGN == existing().totalNGN
+              ) ||
+              // Action 2: Customer updates WhatsApp milestone notification preference
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['whatsappOptIn', 'updatedAt'])
+              )
+            )
+          )
+        );
+    }
+
+    // 5. Drop Alert Newsletter Subscriptions
+    match /newsletterSubscribers/{subscriberId} {
+      allow get: if isValidId(subscriberId) && isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && isBootstrappedAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(subscriberId)
+        && isValidSubscriber(incoming())
+        && incoming().createdAt == request.time;
+    }
+
+    // 6. Studio Contact Inquiries
+    match /contactInquiries/{inquiryId} {
+      allow get: if isValidId(inquiryId) && isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && isBootstrappedAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(inquiryId)
+        && isValidInquiry(incoming())
+        && incoming().createdAt == request.time;
+    }
+
+    // 7. Admin RBAC Records (Server/Console managed only)
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && isSignedIn() && request.auth.uid == adminUid;
+      allow write: if false;
+    }
+  }
+}
