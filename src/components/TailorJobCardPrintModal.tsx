@@ -1,7 +1,8 @@
-import React from 'react';
-import { Printer, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Download, Printer, X } from 'lucide-react';
 import { Order } from '../types/josy';
 import { inToCm } from '../data/catalog';
+import { downloadTailorJobCardFromServer } from '../lib/api';
 import { JosyLogo } from './JosyLogo';
 
 interface TailorJobCardPrintModalProps {
@@ -10,6 +11,7 @@ interface TailorJobCardPrintModalProps {
 }
 
 export function TailorJobCardPrintModal({ order, onClose }: TailorJobCardPrintModalProps) {
+  const [downloading, setDownloading] = useState(false);
   if (!order) return null;
 
   const customItems = order.bespokeItems;
@@ -30,6 +32,19 @@ export function TailorJobCardPrintModal({ order, onClose }: TailorJobCardPrintMo
             <p className="text-sm font-mono font-medium">Job Card #{order.id}</p>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={downloading}
+              onClick={async () => {
+                setDownloading(true);
+                await downloadTailorJobCardFromServer(order);
+                setDownloading(false);
+              }}
+              className="px-4 py-2 border border-white/30 text-white text-xs font-medium flex items-center gap-2 hover:bg-white/10 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              <span>{downloading ? 'Exporting...' : 'Download Cut Sheet'}</span>
+            </button>
             <button
               type="button"
               onClick={() => window.print()}
@@ -82,10 +97,14 @@ export function TailorJobCardPrintModal({ order, onClose }: TailorJobCardPrintMo
             <div>
               <p className="text-[#71717A] uppercase tracking-wider mb-1">Payment Clearance</p>
               <p className="font-semibold">
-                {order.balanceSettled ? 'Cleared (100% Paid)' : '60% Deposit Paid — Hold Dispatch Until 40% QC Balance'}
+                {order.balanceSettled
+                  ? 'Cleared (100% Paid)'
+                  : order.amountPaidNGN === 0
+                    ? 'Payment Pending — Confirm Before Dispatch'
+                    : '60% Deposit Paid — Hold Dispatch Until 40% QC Balance'}
               </p>
               <p className="font-mono text-[#52525B] mt-0.5">
-                Gateway: {order.paymentGateway.split(' ')[0]}
+                Method: {order.paymentGateway}
               </p>
             </div>
           </div>

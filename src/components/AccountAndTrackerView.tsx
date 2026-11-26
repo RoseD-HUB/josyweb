@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   Check,
+  Download,
   Heart,
   LogIn,
   LogOut,
@@ -18,6 +19,7 @@ import {
   RTW_PIPELINE,
 } from '../data/catalog';
 import { useStore } from '../context/StoreContext';
+import { downloadOrderReceiptFromServer } from '../lib/api';
 import { MeasurementProfile } from '../types/josy';
 import { MeasurementDrawer } from './MeasurementDrawer';
 
@@ -41,11 +43,13 @@ export function AccountAndTrackerView() {
     settleBespokeBalance,
     toggleOrderWhatsapp,
     setActivePage,
+    showToast,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<AccountTab>('orders');
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<MeasurementProfile | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const wishlistProducts = products.filter((p) => wishlistIds.includes(p.id));
 
@@ -188,12 +192,18 @@ export function AccountAndTrackerView() {
                         </p>
                       </div>
                       <div>
-                        <p className="text-[#71717A]">Paid</p>
+                        <p className="text-[#71717A]">
+                          {order.amountPaidNGN === 0 && !order.balanceSettled
+                            ? 'Payment Status'
+                            : 'Paid'}
+                        </p>
                         <p className="font-mono font-semibold text-[#1B365D] tabular-nums">
-                          {formatMoney(order.amountPaidNGN, currency)}
+                          {order.amountPaidNGN === 0 && !order.balanceSettled
+                            ? 'Pending Studio Confirmation'
+                            : formatMoney(order.amountPaidNGN, currency)}
                         </p>
                       </div>
-                      {!order.balanceSettled && order.balanceDueNGN > 0 && (
+                      {!order.balanceSettled && order.balanceDueNGN > 0 && order.amountPaidNGN > 0 && (
                         <div>
                           <p className="text-[#71717A]">40% Balance Upon QC</p>
                           <p className="font-mono font-semibold text-[#B48436] tabular-nums">
@@ -201,6 +211,24 @@ export function AccountAndTrackerView() {
                           </p>
                         </div>
                       )}
+                      <button
+                        type="button"
+                        disabled={downloadingId === order.id}
+                        onClick={async () => {
+                          setDownloadingId(order.id);
+                          const ok = await downloadOrderReceiptFromServer(order);
+                          setDownloadingId(null);
+                          showToast(
+                            ok
+                              ? `Downloaded official receipt for ${order.id}`
+                              : 'Unable to generate receipt right now.'
+                          );
+                        }}
+                        className="px-3 py-2 border border-[#D4D4D8] text-[#111113] text-[11px] font-medium flex items-center gap-1.5 hover:border-[#111113] transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>{downloadingId === order.id ? 'Generating...' : 'Download Receipt'}</span>
+                      </button>
                     </div>
                   </div>
 

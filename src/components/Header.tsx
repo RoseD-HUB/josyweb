@@ -30,6 +30,9 @@ export function Header() {
     setIsSearchOpen,
     user,
     isAdmin,
+    workshopTab,
+    setWorkshopTab,
+    openWhitelistManager,
   } = useStore();
 
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -286,17 +289,36 @@ export function Header() {
             </button>
 
             {isAdmin && (
-              <button
-                type="button"
-                onClick={() => handleNavClick('workshop')}
-                className={`h-full flex items-center whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
-                  activePage === 'workshop'
-                    ? 'text-[#1B365D] border-[#1B365D] font-semibold'
-                    : 'border-transparent text-[#1B365D] hover:border-[#1B365D]'
-                }`}
-              >
-                Workshop Portal
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWorkshopTab('dashboard');
+                    handleNavClick('workshop');
+                  }}
+                  className={`h-full flex items-center whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+                    activePage === 'workshop' && workshopTab !== 'whitelist'
+                      ? 'text-[#1B365D] border-[#1B365D] font-semibold'
+                      : 'border-transparent text-[#1B365D] hover:border-[#1B365D]'
+                  }`}
+                >
+                  Workshop Portal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMegaOpen(false);
+                    openWhitelistManager();
+                  }}
+                  className={`h-full flex items-center whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+                    activePage === 'workshop' && workshopTab === 'whitelist'
+                      ? 'text-[#B48436] border-[#B48436] font-semibold'
+                      : 'border-transparent text-[#B48436] hover:border-[#B48436]'
+                  }`}
+                >
+                  Access Whitelist
+                </button>
+              </>
             )}
           </nav>
 

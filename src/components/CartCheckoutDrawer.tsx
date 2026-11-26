@@ -1,8 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
-  Check,
-  CreditCard,
+  Clock,
   Minus,
   Plus,
   Scissors,
@@ -38,11 +37,6 @@ export function CartCheckoutDrawer() {
   const [whatsappOptIn, setWhatsappOptIn] = useState(true);
   const [selectedZoneId, setSelectedZoneId] = useState<ShippingZoneId>('DELTA_METRO');
   const [paymentPlan, setPaymentPlan] = useState<PaymentPlan>('FULL_UPFRONT');
-  const [selectedGateway, setSelectedGateway] = useState<PaymentGateway>(
-    currency === 'NGN'
-      ? 'Paystack (NGN Cards / Transfer / USSD)'
-      : 'Stripe Global (Cards / Apple Pay)'
-  );
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const rtwItems = useMemo(() => cart.filter((i) => i.selectedMode === 'RTW'), [cart]);
@@ -72,14 +66,7 @@ export function CartCheckoutDrawer() {
   const amountDueNowNGN = rtwSubtotal + bespokeDepositNow + selectedZone.rateNGN;
   const balanceUponQcNGN = totalNGN - amountDueNowNGN;
 
-  const availableGateways: PaymentGateway[] =
-    currency === 'NGN'
-      ? ['Paystack (NGN Cards / Transfer / USSD)', 'Flutterwave Nigeria (NGN)']
-      : ['Stripe Global (Cards / Apple Pay)', 'Flutterwave Global Cards'];
-
-  const activeGateway: PaymentGateway = availableGateways.includes(selectedGateway)
-    ? selectedGateway
-    : availableGateways[0];
+  const activeGateway: PaymentGateway = 'Payment Pending (Studio Confirmation)';
 
   if (!isCartOpen) return null;
 
@@ -140,7 +127,7 @@ export function CartCheckoutDrawer() {
               <p className="text-xs text-[#71717A]">
                 {step === 'cart'
                   ? 'Split-fulfillment overview: RTW & Custom Tailoring'
-                  : `Paying in ${currency} via ${activeGateway.split(' ')[0]}`}
+                  : `Order reservation in ${currency} · Payment pending studio confirmation`}
               </p>
             </div>
           </div>
@@ -363,7 +350,7 @@ export function CartCheckoutDrawer() {
                 }}
                 className="w-full py-3.5 bg-[#111113] text-white text-xs font-medium tracking-wider uppercase hover:bg-[#1B365D] transition-colors cursor-pointer"
               >
-                Proceed to Shipping & Payment
+                Proceed to Shipping & Order Confirmation
               </button>
             </div>
           </>
@@ -541,30 +528,27 @@ export function CartCheckoutDrawer() {
                 </div>
               )}
 
-              {/* Multi-Gateway Payment Selector */}
+              {/* Payment Status: Pending Activation */}
               <div className="space-y-2.5 pt-4 border-t border-[#E4E4E0]">
                 <p className="text-xs font-semibold text-[#111113] uppercase tracking-wider">
-                  {splitAllowed ? '4.' : '3.'} Payment Gateway ({currency})
+                  {splitAllowed ? '4.' : '3.'} Payment Option ({currency})
                 </p>
-                <div className="space-y-2">
-                  {availableGateways.map((gw) => (
-                    <button
-                      key={gw}
-                      type="button"
-                      onClick={() => setSelectedGateway(gw)}
-                      className={`w-full p-3 border text-left text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                        activeGateway === gw
-                          ? 'border-[#111113] bg-[#F8FAFC] font-medium text-[#111113]'
-                          : 'border-[#E4E4E0] text-[#52525B]'
-                      }`}
-                    >
-                      <span className="flex items-center gap-2">
-                        <CreditCard className="w-4 h-4 text-[#1B365D]" />
-                        <span>{gw}</span>
-                      </span>
-                      {activeGateway === gw && <Check className="w-4 h-4 text-[#1B365D]" />}
-                    </button>
-                  ))}
+                <div className="p-4 border border-[#1B365D] bg-[#F8FAFC] space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 text-xs font-semibold text-[#111113]">
+                      <Clock className="w-4 h-4 text-[#B48436]" />
+                      <span>Payment Pending — Studio Confirmation</span>
+                    </span>
+                    <span className="font-mono text-[11px] font-medium text-[#1B365D]">
+                      Pending
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#52525B] leading-relaxed">
+                    Online card gateways are currently pending activation. Submitting this order
+                    reserves your items in our live Isoko Road, Ughelli production tracker, and our
+                    studio will coordinate payment confirmation directly via WhatsApp (07032802844)
+                    or email (josephwingie@gmail.com).
+                  </p>
                 </div>
               </div>
             </div>
@@ -583,16 +567,16 @@ export function CartCheckoutDrawer() {
                   </span>
                 </div>
                 <div className="flex justify-between text-sm font-semibold text-[#111113] pt-2 border-t border-[#E4E4E0]">
-                  <span>Amount Due Now</span>
+                  <span>Estimated Order Total (Payment Pending)</span>
                   <span className="font-mono tabular-nums">
-                    {formatMoney(amountDueNowNGN, currency)}
+                    {formatMoney(totalNGN, currency)}
                   </span>
                 </div>
                 {balanceUponQcNGN > 0 && (
                   <div className="flex justify-between text-xs text-[#1B365D]">
-                    <span>40% Luxury Balance (Due upon QC)</span>
+                    <span>Planned 60% Deposit / 40% Upon QC</span>
                     <span className="font-mono tabular-nums">
-                      {formatMoney(balanceUponQcNGN, currency)}
+                      {formatMoney(amountDueNowNGN, currency)} / {formatMoney(balanceUponQcNGN, currency)}
                     </span>
                   </div>
                 )}
@@ -604,14 +588,14 @@ export function CartCheckoutDrawer() {
                 className="w-full py-3.5 bg-[#111113] text-white text-xs font-medium tracking-wider uppercase hover:bg-[#1B365D] transition-colors disabled:opacity-60 cursor-pointer"
               >
                 {isSubmitting
-                  ? 'Confirming Order...'
+                  ? 'Submitting Order...'
                   : user
-                    ? `Complete Order · ${formatMoney(amountDueNowNGN, currency)}`
-                    : `Create Buyer Account & Place Order · ${formatMoney(amountDueNowNGN, currency)}`}
+                    ? `Submit Order (Payment Pending) · ${formatMoney(totalNGN, currency)}`
+                    : `Create Buyer Account & Submit Order · ${formatMoney(totalNGN, currency)}`}
               </button>
               <p className="text-[11px] text-[#71717A] flex items-center justify-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Encrypted order sync with live Isoko Road production tracking</span>
+                <span>Order saved directly to Josy Textile backend & Isoko Road tracker</span>
               </p>
             </div>
           </form>

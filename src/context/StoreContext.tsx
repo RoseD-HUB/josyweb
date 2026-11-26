@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -25,6 +26,7 @@ import {
   auth,
   BOOTSTRAPPED_ADMIN_EMAIL,
   db,
+  googlePopupResolver,
   googleProvider,
   handleFirestoreError,
   OperationType,
@@ -45,14 +47,30 @@ import {
   ShippingZone,
   SizeCode,
   StoreSettings,
+  WhitelistEntry,
 } from '../types/josy';
 import {
   BESPOKE_PIPELINE,
+  CURRENCY_META,
   INITIAL_MEASUREMENT_PROFILES,
   INITIAL_ORDERS,
   INITIAL_PRODUCTS,
   RTW_PIPELINE,
 } from '../data/catalog';
+import {
+  checkServerWhitelistMembership,
+  dispatchMilestoneNotification,
+  fetchWhitelistSeedEntriesFromServer,
+  forwardStudioInquiryToEmail,
+  generateAdminTrackingCode,
+  hashWhitelistPasswordOnServer,
+  initializePaymentOnServer,
+  isTrustedCheckoutUrl,
+  loginWithServerWhitelistFallback,
+  prepareOrderOnServer,
+  syncWhitelistStatusOnServer,
+  verifyWhitelistPasswordOnServer,
+} from '../lib/api';
 
 const CART_STORAGE_KEY = 'josy_textile_cart_v1';
 const CURRENCY_STORAGE_KEY = 'josy_textile_currency_v1';
@@ -86,10 +104,15 @@ export interface PlaceOrderInput {
   paymentPlan: PaymentPlan;
 }
 
+export type WorkshopTabId = 'dashboard' | 'queue' | 'catalog' | 'whitelist';
+
 interface StoreContextValue {
   // Navigation & UI overlays
   activePage: ActivePageView;
   setActivePage: (page: ActivePageView) => void;
+  workshopTab: WorkshopTabId;
+  setWorkshopTab: (tab: WorkshopTabId) => void;
+  openWhitelistManager: () => void;
   activeCategoryFilter: CategoryCode | 'ALL';
   setActiveCategoryFilter: (cat: CategoryCode | 'ALL') => void;
   activeHomeTab: HomeFilterTab;
@@ -109,10 +132,26 @@ interface StoreContextValue {
   toastMessage: string | null;
   showToast: (msg: string) => void;
 
-  // Auth
+  // Auth & Access Whitelist
   user: User | null;
   authReady: boolean;
   isAdmin: boolean;
+  isWhitelistedUser: boolean;
+  whitelistCheckReady: boolean;
+  whitelistError: string | null;
+  whitelistEntries: WhitelistEntry[];
+  signInWithWhitelist: (
+    email: string,
+    password: string
+  ) => Promise<{ user: User | null; error?: string }>;
+  addWhitelistEntry: (input: {
+    email: string;
+    displayName: string;
+    password: string;
+    note?: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  toggleWhitelistEntryActive: (emailId: string, active: boolean) => Promise<void>;
+  removeWhitelistEntry: (emailId: string) => Promise<void>;
   signUpWithEmail: (
     fullName: string,
     email: string,
@@ -178,6 +217,7 @@ const StoreContext = createContext<StoreContextValue | undefined>(undefined);
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [activePage, setActivePage] = useState<ActivePageView>('home');
+  const [workshopTab, setWorkshopTab] = useState<WorkshopTabId>('dashboard');
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<CategoryCode | 'ALL'>('ALL');
   const [activeHomeTab, setActiveHomeTab] = useState<HomeFilterTab>('All');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -188,15 +228,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [authModalMode, setAuthModalMode] = useState<'signup' | 'signin'>('signup');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  const openWhitelistManager = () => {
+    setWorkshopTab('whitelist');
+    setActivePage('workshop');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const openAuthModal = (mode: 'signup' | 'signin' = 'signup') => {
     setAuthModalMode(mode);
     setIsAuthModalOpen(true);
   };
 
-  // Auth State
+  // Auth & Whitelist State
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [isAdminDoc, setIsAdminDoc] = useState(false);
+  const [isWhitelistedUser, setIsWhitelistedUser] = useState(false);
+  const [whitelistCheckReady, setWhitelistCheckReady] = useState(false);
+  const [whitelistError, setWhitelistError] = useState<string | null>(null);
+  const [whitelistEntries, setWhitelistEntries] = useState<WhitelistEntry[]>([]);
+  const whitelistSessionTokenRef = useRef<string | null>(null);
+  const whitelistVerifyInProgressRef = useRef(false);
+  const whitelistSeedSyncedRef = useRef(false);
 
   // Store Data State
   const [currency, setCurrencyState] = useState<CurrencyCode>(() => {
@@ -214,6 +267,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     bespokeCapacityOpen: true,
     splitDepositEnabled: true,
     bespokeLeadWindow: '10–14 business days',
+    whitelistGateEnabled: true,
   });
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
@@ -266,7 +320,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       setIsAdminDoc(false);
-      if (firebaseUser) {
+
+      if (!firebaseUser) {
+        setIsWhitelistedUser(Boolean(whitelistSessionTokenRef.current));
+        setWhitelistCheckReady(true);
+        setAuthReady(true);
+        return;
+      }
+
+      const isBootstrappedAdmin =
+        Boolean(firebaseUser.emailVerified) &&
+        firebaseUser.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+
+      if (isBootstrappedAdmin) {
+        setIsWhitelistedUser(true);
+        setWhitelistError(null);
+        setWhitelistCheckReady(true);
+      }
+
+      if (!whitelistVerifyInProgressRef.current) {
         try {
           const userRef = doc(db, 'users', firebaseUser.uid);
           const snap = await getDoc(userRef);
@@ -282,11 +354,39 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           }
           // Check optional /admins/{uid} doc
           const adminSnap = await getDoc(doc(db, 'admins', firebaseUser.uid));
-          if (adminSnap.exists()) {
+          const hasAdminDoc = adminSnap.exists();
+          if (hasAdminDoc) {
             setIsAdminDoc(true);
+            setIsWhitelistedUser(true);
+            setWhitelistError(null);
+          } else if (!isBootstrappedAdmin) {
+            const cleanEmail = firebaseUser.email?.trim().toLowerCase() || '';
+            if (cleanEmail) {
+              const wlSnap = await getDoc(doc(db, 'accessWhitelist', cleanEmail));
+              let allowed = false;
+              if (wlSnap.exists()) {
+                allowed = wlSnap.data().active === true;
+              } else {
+                const token = await firebaseUser.getIdToken();
+                const serverCheck = await checkServerWhitelistMembership(token);
+                allowed = serverCheck.allowed;
+              }
+              setIsWhitelistedUser(allowed);
+              if (!allowed) {
+                setWhitelistError(
+                  'Access restricted: your email is not currently active on the Josy Textile whitelist.'
+                );
+              } else {
+                setWhitelistError(null);
+              }
+            } else {
+              setIsWhitelistedUser(false);
+            }
           }
         } catch (err) {
-          console.warn('Profile bootstrap skipped:', err);
+          console.warn('Profile / whitelist bootstrap check skipped:', err);
+        } finally {
+          setWhitelistCheckReady(true);
         }
       }
       setAuthReady(true);
@@ -346,6 +446,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             bespokeCapacityOpen: Boolean(d.bespokeCapacityOpen),
             splitDepositEnabled: Boolean(d.splitDepositEnabled),
             bespokeLeadWindow: String(d.bespokeLeadWindow || '10–14 business days'),
+            whitelistGateEnabled: d.whitelistGateEnabled !== false,
           });
         }
       },
@@ -481,6 +582,107 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [authReady, user]);
 
+  // 3B. Live Access Whitelist Sync (Admin full list + one-time seed sync; Non-admin live revocation check)
+  useEffect(() => {
+    if (!authReady || !user) {
+      setWhitelistEntries([]);
+      whitelistSeedSyncedRef.current = false;
+      return;
+    }
+
+    if (isAdmin) {
+      const unsubAll = onSnapshot(
+        collection(db, 'accessWhitelist'),
+        (snap) => {
+          const entries: WhitelistEntry[] = snap.docs
+            .map((d) => {
+              const data = d.data();
+              return {
+                email: String(data.email || d.id),
+                displayName: String(data.displayName || ''),
+                active: Boolean(data.active),
+                passwordHash: String(data.passwordHash || ''),
+                passwordSalt: String(data.passwordSalt || ''),
+                note: String(data.note || ''),
+                addedByUid: String(data.addedByUid || ''),
+                createdAt: timestampToIso(data.createdAt),
+                updatedAt: timestampToIso(data.updatedAt),
+              };
+            })
+            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+          setWhitelistEntries(entries);
+
+          // One-time sync of pre-hashed server seed entries into Firestore for Admin visibility & revocation
+          if (!whitelistSeedSyncedRef.current) {
+            whitelistSeedSyncedRef.current = true;
+            const existingIds = new Set(entries.map((e) => e.email.toLowerCase()));
+            void (async () => {
+              const seeds = await fetchWhitelistSeedEntriesFromServer();
+              for (const seed of seeds) {
+                const emailId = seed.email.trim().toLowerCase();
+                if (!existingIds.has(emailId)) {
+                  try {
+                    await setDoc(doc(db, 'accessWhitelist', emailId), {
+                      email: emailId,
+                      displayName: clampStr(seed.displayName || 'Josy Member', 120),
+                      active: seed.active,
+                      passwordHash: seed.passwordHash,
+                      passwordSalt: seed.passwordSalt,
+                      note: clampStr(seed.note || '', 240),
+                      addedByUid: user.uid,
+                      createdAt: serverTimestamp(),
+                      updatedAt: serverTimestamp(),
+                    });
+                  } catch (seedErr) {
+                    console.warn('Whitelist seed sync note:', seedErr);
+                  }
+                }
+              }
+            })();
+          }
+        },
+        (err) => {
+          console.warn('Whitelist admin listener error:', err.message);
+        }
+      );
+      return () => unsubAll();
+    }
+
+    const cleanEmail = user.email?.trim().toLowerCase() || '';
+    if (!cleanEmail) return;
+    const unsubSelf = onSnapshot(
+      doc(db, 'accessWhitelist', cleanEmail),
+      (snap) => {
+        if (whitelistVerifyInProgressRef.current) return;
+        if (snap.exists()) {
+          const allowed = snap.data().active === true;
+          setIsWhitelistedUser(allowed);
+          if (!allowed && settings.whitelistGateEnabled !== false) {
+            setWhitelistError('Your access has been revoked or is not on the approved whitelist.');
+          } else {
+            setWhitelistError(null);
+          }
+        } else {
+          void (async () => {
+            const serverCheck = await checkServerWhitelistMembership();
+            setIsWhitelistedUser(serverCheck.allowed);
+            if (!serverCheck.allowed && settings.whitelistGateEnabled !== false) {
+              setWhitelistError('Your access has been revoked or is not on the approved whitelist.');
+            } else {
+              setWhitelistError(null);
+            }
+          })();
+        }
+      },
+      () => {
+        if (!whitelistVerifyInProgressRef.current) {
+          setIsWhitelistedUser(false);
+        }
+      }
+    );
+    return () => unsubSelf();
+  }, [authReady, user, isAdmin, settings.whitelistGateEnabled]);
+
   // Auth Actions
   const formatFirebaseAuthError = (err: unknown): string => {
     const code = (err as { code?: string })?.code || '';
@@ -507,6 +709,302 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return 'Too many attempts. Please wait a moment and try again.';
     }
     return 'Authentication could not be completed. Please try again.';
+  };
+
+  // Whitelist Access Gate Sign-In (Firebase Auth primary + server-signed fallback if Email/Password provider is pending)
+  const signInWithWhitelist = async (
+    email: string,
+    password: string
+  ): Promise<{ user: User | null; error?: string }> => {
+    const cleanEmail = clampStr(email, 180).toLowerCase();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return { user: null, error: 'Please enter a valid email address.' };
+    }
+    if (password.length < 6) {
+      return { user: null, error: 'Password must be at least 6 characters.' };
+    }
+
+    const attemptServerFallback = async (): Promise<{ user: User | null; error?: string }> => {
+      const serverLogin = await loginWithServerWhitelistFallback({
+        email: cleanEmail,
+        password,
+      });
+      if (!serverLogin.ok || !serverLogin.token) {
+        const errMsg =
+          serverLogin.error ||
+          'Access denied: invalid credentials or email is not active on the whitelist.';
+        setWhitelistError(errMsg);
+        return { user: null, error: errMsg };
+      }
+      whitelistSessionTokenRef.current = serverLogin.token;
+      setIsWhitelistedUser(true);
+      setWhitelistCheckReady(true);
+      setWhitelistError(null);
+      showToast(`Welcome to Josy Textile, ${serverLogin.displayName || 'Member'}`);
+      return { user: null };
+    };
+
+    whitelistVerifyInProgressRef.current = true;
+    setWhitelistError(null);
+
+    try {
+      // Attempt 1: Existing Firebase Auth user
+      try {
+        const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+        const signedUser = cred.user;
+        const isBootstrapped =
+          Boolean(signedUser.emailVerified) &&
+          signedUser.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
+
+        if (isBootstrapped) {
+          setIsWhitelistedUser(true);
+          setWhitelistCheckReady(true);
+          showToast('Welcome back, Studio Administrator');
+          return { user: signedUser };
+        }
+
+        const wlSnap = await getDoc(doc(db, 'accessWhitelist', cleanEmail));
+        if (wlSnap.exists()) {
+          if (wlSnap.data().active !== true) {
+            await signOut(auth);
+            setIsWhitelistedUser(false);
+            const deniedMsg =
+              'Access denied: this email is not currently active on the Josy Textile whitelist.';
+            setWhitelistError(deniedMsg);
+            return { user: null, error: deniedMsg };
+          }
+          setIsWhitelistedUser(true);
+          setWhitelistCheckReady(true);
+          showToast(
+            `Welcome to Josy Textile, ${wlSnap.data().displayName || signedUser.displayName || 'Member'}`
+          );
+          return { user: signedUser };
+        }
+
+        // Not yet synced to Firestore: verify against server-side pre-hashed whitelist registry
+        const token = await signedUser.getIdToken();
+        const serverVerify = await verifyWhitelistPasswordOnServer({
+          password,
+          useServerRegistry: true,
+          idToken: token,
+        });
+        if (!serverVerify.valid) {
+          await signOut(auth);
+          setIsWhitelistedUser(false);
+          const deniedMsg =
+            'Access denied: this email is not currently active on the Josy Textile whitelist.';
+          setWhitelistError(deniedMsg);
+          return { user: null, error: deniedMsg };
+        }
+
+        setIsWhitelistedUser(true);
+        setWhitelistCheckReady(true);
+        showToast(
+          `Welcome to Josy Textile, ${serverVerify.displayName || signedUser.displayName || 'Member'}`
+        );
+        return { user: signedUser };
+      } catch (signInErr) {
+        const code = (signInErr as { code?: string })?.code || '';
+        if (code === 'auth/operation-not-allowed') {
+          return await attemptServerFallback();
+        }
+        if (
+          code !== 'auth/invalid-credential' &&
+          code !== 'auth/user-not-found' &&
+          code !== 'auth/wrong-password'
+        ) {
+          const msg = formatFirebaseAuthError(signInErr);
+          setWhitelistError(msg);
+          return { user: null, error: msg };
+        }
+      }
+
+      // Attempt 2: First-time activation using Admin-assigned whitelisted email & salted scrypt password
+      try {
+        const createdCred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        const createdUser = createdCred.user;
+
+        try {
+          const wlSnap = await getDoc(doc(db, 'accessWhitelist', cleanEmail));
+          const token = await createdUser.getIdToken();
+          let assignedName = 'Josy Member';
+          let passwordValid = false;
+
+          if (wlSnap.exists()) {
+            if (wlSnap.data().active !== true) {
+              await deleteUser(createdUser);
+              setIsWhitelistedUser(false);
+              const deniedMsg =
+                'Access denied: this email is not currently active on the Josy Textile whitelist.';
+              setWhitelistError(deniedMsg);
+              return { user: null, error: deniedMsg };
+            }
+            const wlData = wlSnap.data();
+            assignedName = clampStr(String(wlData.displayName || 'Josy Member'), 120);
+            const verified = await verifyWhitelistPasswordOnServer({
+              password,
+              passwordHash: String(wlData.passwordHash || ''),
+              passwordSalt: String(wlData.passwordSalt || ''),
+              idToken: token,
+            });
+            passwordValid = verified.valid;
+          } else {
+            const verified = await verifyWhitelistPasswordOnServer({
+              password,
+              useServerRegistry: true,
+              idToken: token,
+            });
+            passwordValid = verified.valid;
+            if (verified.displayName) {
+              assignedName = clampStr(verified.displayName, 120);
+            }
+          }
+
+          if (!passwordValid) {
+            await deleteUser(createdUser);
+            setIsWhitelistedUser(false);
+            const wrongMsg =
+              'Access denied: invalid credentials or email is not on the approved whitelist.';
+            setWhitelistError(wrongMsg);
+            return { user: null, error: wrongMsg };
+          }
+
+          await updateProfile(createdUser, { displayName: assignedName });
+          await setDoc(doc(db, 'users', createdUser.uid), {
+            uid: createdUser.uid,
+            displayName: assignedName,
+            email: cleanEmail,
+            wishlistIds: [],
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+
+          setIsWhitelistedUser(true);
+          setWhitelistCheckReady(true);
+          showToast(`Welcome to Josy Textile, ${assignedName}`);
+          return { user: createdUser };
+        } catch {
+          try {
+            await deleteUser(createdUser);
+          } catch {
+            await signOut(auth);
+          }
+          setIsWhitelistedUser(false);
+          const failMsg = 'Unable to verify whitelist credentials. Please try again.';
+          setWhitelistError(failMsg);
+          return { user: null, error: failMsg };
+        }
+      } catch (createErr) {
+        const code = (createErr as { code?: string })?.code || '';
+        if (code === 'auth/operation-not-allowed') {
+          return await attemptServerFallback();
+        }
+        const msg =
+          code === 'auth/email-already-in-use'
+            ? 'Invalid password for this whitelisted email. Please check your password and retry.'
+            : formatFirebaseAuthError(createErr);
+        setWhitelistError(msg);
+        return { user: null, error: msg };
+      }
+    } finally {
+      whitelistVerifyInProgressRef.current = false;
+      setWhitelistCheckReady(true);
+    }
+  };
+
+  // Admin: Add Approved Email & Salted Password Hash to Whitelist
+  const addWhitelistEntry = async (input: {
+    email: string;
+    displayName: string;
+    password: string;
+    note?: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!isAdmin || !user) {
+      return { ok: false, error: 'Only verified Studio Administrators can manage the whitelist.' };
+    }
+    const cleanEmail = clampStr(input.email, 180).toLowerCase();
+    const cleanName = clampStr(input.displayName, 120);
+    const cleanNote = clampStr(input.note || '', 240);
+
+    if (!/^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(cleanEmail)) {
+      return { ok: false, error: 'Please enter a valid email address.' };
+    }
+    if (cleanName.length < 1) {
+      return { ok: false, error: 'Please provide a member name or label.' };
+    }
+    if (input.password.length < 6 || input.password.length > 128) {
+      return { ok: false, error: 'Password must be between 6 and 128 characters.' };
+    }
+
+    const hashed = await hashWhitelistPasswordOnServer(input.password, {
+      email: cleanEmail,
+      displayName: cleanName,
+      note: cleanNote,
+    });
+    if (!hashed) {
+      return { ok: false, error: 'Unable to hash password on backend server. Please retry.' };
+    }
+
+    const path = `accessWhitelist/${cleanEmail}`;
+    const entryRef = doc(db, 'accessWhitelist', cleanEmail);
+    try {
+      const existingSnap = await getDoc(entryRef);
+      if (existingSnap.exists()) {
+        await updateDoc(entryRef, {
+          displayName: cleanName,
+          active: true,
+          passwordHash: hashed.passwordHash,
+          passwordSalt: hashed.passwordSalt,
+          note: cleanNote,
+          updatedAt: serverTimestamp(),
+        });
+        showToast(`Updated whitelist credentials for ${cleanEmail}`);
+      } else {
+        await setDoc(entryRef, {
+          email: cleanEmail,
+          displayName: cleanName,
+          active: true,
+          passwordHash: hashed.passwordHash,
+          passwordSalt: hashed.passwordSalt,
+          note: cleanNote,
+          addedByUid: user.uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        showToast(`Added ${cleanEmail} to Josy Textile access whitelist`);
+      }
+      return { ok: true };
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+      return { ok: false, error: 'Unable to save whitelist entry.' };
+    }
+  };
+
+  const toggleWhitelistEntryActive = async (emailId: string, active: boolean) => {
+    if (!isAdmin) return;
+    const path = `accessWhitelist/${emailId}`;
+    try {
+      await updateDoc(doc(db, 'accessWhitelist', emailId), {
+        active,
+        updatedAt: serverTimestamp(),
+      });
+      void syncWhitelistStatusOnServer({ email: emailId, active, removed: false });
+      showToast(active ? `Restored access for ${emailId}` : `Revoked access for ${emailId}`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  };
+
+  const removeWhitelistEntry = async (emailId: string) => {
+    if (!isAdmin) return;
+    const path = `accessWhitelist/${emailId}`;
+    try {
+      await deleteDoc(doc(db, 'accessWhitelist', emailId));
+      void syncWhitelistStatusOnServer({ email: emailId, active: false, removed: true });
+      showToast(`Removed ${emailId} from access whitelist`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
   };
 
   const signUpWithEmail = async (
@@ -556,7 +1054,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const signInWithGoogle = async (): Promise<User | null> => {
     try {
-      const result = await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider, googlePopupResolver);
       showToast(`Signed in as ${result.user.displayName || result.user.email}`);
       return result.user;
     } catch (err) {
@@ -569,6 +1067,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOutUser = async () => {
+    whitelistSessionTokenRef.current = null;
+    setIsWhitelistedUser(false);
     await signOut(auth);
     showToast('Signed out of Josy Textile');
   };
@@ -747,26 +1247,51 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const bespokeItems = cart.filter((i) => i.selectedMode === 'BESPOKE');
     if (rtwItems.length + bespokeItems.length === 0) return null;
 
+    const prepared = await prepareOrderOnServer({
+      shippingZoneId: input.shippingZone.id,
+      currency,
+      paymentPlan: input.paymentPlan,
+      paymentGateway: input.paymentGateway,
+      splitDepositEnabled: settings.splitDepositEnabled,
+      items: cart.map((item) => ({
+        selectedMode: item.selectedMode,
+        unitPriceNGN: item.unitPriceNGN,
+        quantity: item.quantity,
+      })),
+    });
+
     const rtwSubtotal = rtwItems.reduce((sum, i) => sum + i.unitPriceNGN * i.quantity, 0);
     const bespokeSubtotal = bespokeItems.reduce((sum, i) => sum + i.unitPriceNGN * i.quantity, 0);
-    const subtotalNGN = Math.round(rtwSubtotal + bespokeSubtotal);
-    const shippingNGN = Math.round(input.shippingZone.rateNGN);
-    const totalNGN = subtotalNGN + shippingNGN;
+    const fallbackSubtotalNGN = Math.round(rtwSubtotal + bespokeSubtotal);
+    const fallbackShippingNGN = Math.round(input.shippingZone.rateNGN);
+    const fallbackTotalNGN = fallbackSubtotalNGN + fallbackShippingNGN;
 
     const useSplit =
-      input.paymentPlan === 'SPLIT_DEPOSIT_60_40' &&
+      (prepared?.paymentPlan || input.paymentPlan) === 'SPLIT_DEPOSIT_60_40' &&
       bespokeItems.length > 0 &&
       settings.splitDepositEnabled;
 
-    const bespokeDeposit = useSplit ? Math.round(bespokeSubtotal * 0.6) : bespokeSubtotal;
-    const amountPaidNGN = rtwSubtotal + bespokeDeposit + shippingNGN;
-    const balanceDueNGN = totalNGN - amountPaidNGN;
-    const balanceSettled = balanceDueNGN === 0;
+    const subtotalNGN = prepared?.subtotalNGN ?? fallbackSubtotalNGN;
+    const shippingNGN = prepared?.shippingNGN ?? fallbackShippingNGN;
+    const totalNGN = prepared?.totalNGN ?? fallbackTotalNGN;
+    const isPaymentPending =
+      prepared?.paymentMode === 'pending' ||
+      input.paymentGateway.toLowerCase().includes('pending');
 
-    const orderId = `JT-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-    const targetDate = new Date();
-    targetDate.setDate(targetDate.getDate() + (bespokeItems.length > 0 ? 12 : 3));
-    const targetCompletionDate = targetDate.toISOString().slice(0, 10);
+    const amountPaidNGN = prepared
+      ? prepared.amountPaidNGN
+      : isPaymentPending
+        ? 0
+        : rtwSubtotal + (useSplit ? Math.round(bespokeSubtotal * 0.6) : bespokeSubtotal) + shippingNGN;
+    const balanceDueNGN = prepared ? prepared.balanceDueNGN : totalNGN - amountPaidNGN;
+    const balanceSettled = prepared ? prepared.balanceSettled : balanceDueNGN === 0;
+    const paymentGatewayLabel = prepared?.paymentGatewayLabel || input.paymentGateway;
+
+    const orderId = prepared?.orderId || `JT-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const fallbackTargetDate = new Date();
+    fallbackTargetDate.setDate(fallbackTargetDate.getDate() + (bespokeItems.length > 0 ? 12 : 3));
+    const targetCompletionDate =
+      prepared?.targetCompletionDate || fallbackTargetDate.toISOString().slice(0, 10);
     const nowDisplay = new Date().toISOString().replace('T', ' ').slice(0, 16);
 
     const initialNotifications: Order['notifications'] = [
@@ -774,9 +1299,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         timestamp: nowDisplay,
         stage: bespokeItems.length > 0 ? 'Measurements Confirmed' : 'Order Confirmed',
         channel: input.whatsappOptIn ? 'Email & WhatsApp' : 'Email',
-        message: useSplit
-          ? `Order ${orderId} confirmed via ${input.paymentGateway}. 60% luxury production deposit received; 40% balance due upon Quality Control.`
-          : `Order ${orderId} confirmed in full via ${input.paymentGateway}.`,
+        message: isPaymentPending
+          ? `Order ${orderId} reserved with payment pending studio confirmation. Our Isoko Road team will confirm payment via WhatsApp (07032802844) or email.`
+          : useSplit
+            ? `Order ${orderId} confirmed via ${paymentGatewayLabel}. 60% luxury production deposit received; 40% balance due upon Quality Control.`
+            : `Order ${orderId} confirmed in full via ${paymentGatewayLabel}.`,
       },
     ];
 
@@ -807,7 +1334,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       deliveryAddress: clampStr(input.deliveryAddress, 300),
       shippingZone: input.shippingZone,
       currency,
-      paymentGateway: clampStr(input.paymentGateway, 80),
+      paymentGateway: clampStr(paymentGatewayLabel, 80),
       paymentPlan: useSplit ? 'SPLIT_DEPOSIT_60_40' : 'FULL_UPFRONT',
       rtwItems,
       bespokeItems: cleanBespokeItems,
@@ -851,7 +1378,35 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       clearCart();
       setIsCartOpen(false);
       setActivePage('account');
-      showToast(`Order ${orderId} confirmed — live production tracker ready`);
+
+      const amountMajor =
+        Math.round((amountPaidNGN || totalNGN) * CURRENCY_META[currency].rateFromNGN * 100) / 100;
+      const paymentInit = await initializePaymentOnServer({
+        orderId,
+        gateway: paymentGatewayLabel,
+        currency,
+        amountMajor,
+        customerName: docPayload.customerName,
+        customerEmail: docPayload.customerEmail,
+      });
+
+      void dispatchMilestoneNotification({
+        orderId,
+        stage: initialNotifications[0].stage,
+        message: initialNotifications[0].message,
+        recipientEmail: docPayload.customerEmail,
+        recipientPhone: docPayload.customerPhone,
+        whatsappOptIn: docPayload.whatsappOptIn,
+      });
+
+      if (paymentInit?.mode === 'live' && isTrustedCheckoutUrl(paymentInit.authorizationUrl)) {
+        showToast(`Order ${orderId} saved — redirecting to secure ${paymentInit.gateway} checkout`);
+        window.location.assign(paymentInit.authorizationUrl);
+      } else if (isPaymentPending || paymentInit?.mode === 'pending') {
+        showToast(`Order ${orderId} submitted (payment pending studio confirmation)`);
+      } else {
+        showToast(`Order ${orderId} confirmed — live production tracker ready`);
+      }
 
       return {
         ...docPayload,
@@ -939,7 +1494,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       nextRtw = RTW_PIPELINE[idx + 1];
       stageLabel = nextRtw || '';
       if (nextRtw === 'Dispatched' && !nextRtwCode) {
-        nextRtwCode = `JT-TRK-${Math.floor(100000 + Math.random() * 900000)}`;
+        const generated = await generateAdminTrackingCode({
+          shippingZoneId: target.shippingZone.id,
+          track: 'RTW',
+        });
+        nextRtwCode =
+          generated?.trackingCode || `JT-TRK-${Math.floor(100000 + Math.random() * 900000)}`;
       }
       msg =
         nextRtw === 'Dispatched'
@@ -951,11 +1511,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       nextBespoke = BESPOKE_PIPELINE[idx + 1];
       stageLabel = nextBespoke || '';
       if (nextBespoke === 'Dispatched' && !nextBespokeCode) {
-        nextBespokeCode = `JT-BSP-${Math.floor(100000 + Math.random() * 900000)}`;
+        const generated = await generateAdminTrackingCode({
+          shippingZoneId: target.shippingZone.id,
+          track: 'BESPOKE',
+        });
+        nextBespokeCode =
+          generated?.trackingCode || `JT-LX-${Math.floor(100000 + Math.random() * 900000)}`;
       }
       msg =
         nextBespoke === 'Finishing & Quality Check' && !target.balanceSettled
-          ? 'Garment passed Isoko Road studio QC. Automated 40% balance payment link sent to customer.'
+          ? 'Garment passed Isoko Road studio QC. Studio team will confirm remaining balance prior to dispatch.'
           : nextBespoke === 'Dispatched'
             ? `Custom garment dispatched via ${target.shippingZone.carrier} (Tracking: ${nextBespokeCode}).`
             : `Isoko Road atelier updated luxury tailoring status to ${nextBespoke}.`;
@@ -982,6 +1547,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         bespokeTrackingCode: nextBespokeCode,
         notifications: updatedNotifs,
         updatedAt: serverTimestamp(),
+      });
+      void dispatchMilestoneNotification({
+        orderId,
+        stage: stageLabel,
+        message: msg,
+        recipientEmail: target.customerEmail,
+        recipientPhone: target.customerPhone,
+        whatsappOptIn: target.whatsappOptIn,
       });
       showToast(`Order ${orderId} advanced to "${stageLabel}"`);
     } catch (err) {
@@ -1135,14 +1708,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const inqId = sanitizeId(`inq-${user.uid}-${Date.now().toString().slice(-5)}`);
     const path = `contactInquiries/${inqId}`;
+    const cleanName = clampStr(data.name, 120);
+    const cleanEmail = clampStr(data.email, 180);
+    const cleanSubject = clampStr(data.subject, 160);
+    const cleanMessage = clampStr(data.message, 2000);
     try {
       await setDoc(doc(db, 'contactInquiries', inqId), {
         uid: user.uid,
-        name: clampStr(data.name, 120),
-        email: clampStr(data.email, 180),
-        subject: clampStr(data.subject, 160),
-        message: clampStr(data.message, 2000),
+        name: cleanName,
+        email: cleanEmail,
+        subject: cleanSubject,
+        message: cleanMessage,
         createdAt: serverTimestamp(),
+      });
+      void forwardStudioInquiryToEmail({
+        name: cleanName,
+        email: cleanEmail,
+        subject: cleanSubject,
+        message: cleanMessage,
       });
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, path);
@@ -1156,6 +1739,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       value={{
         activePage,
         setActivePage,
+        workshopTab,
+        setWorkshopTab,
+        openWhitelistManager,
         activeCategoryFilter,
         setActiveCategoryFilter,
         activeHomeTab,
@@ -1177,6 +1763,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         user,
         authReady,
         isAdmin,
+        isWhitelistedUser,
+        whitelistCheckReady,
+        whitelistError,
+        whitelistEntries,
+        signInWithWhitelist,
+        addWhitelistEntry,
+        toggleWhitelistEntryActive,
+        removeWhitelistEntry,
         signUpWithEmail,
         signInWithEmail,
         signInWithGoogle,

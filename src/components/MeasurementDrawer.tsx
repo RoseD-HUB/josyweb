@@ -8,6 +8,7 @@ import {
 } from '../types/josy';
 import { cmToIn, inToCm } from '../data/catalog';
 import { useStore } from '../context/StoreContext';
+import { validateMeasurementsOnServer } from '../lib/api';
 
 type MeasurementKey = keyof BodyMeasurements;
 
@@ -126,7 +127,7 @@ export function MeasurementDrawer({
   defaultSaveProfile = false,
   onConfirm,
 }: MeasurementDrawerProps) {
-  const { measurementProfiles, saveMeasurementProfile, user } = useStore();
+  const { measurementProfiles, saveMeasurementProfile, user, showToast } = useStore();
 
   const [unit, setUnit] = useState<MeasurementUnit>(initialProfile?.unit || 'in');
   const [measurementsIn, setMeasurementsIn] = useState<BodyMeasurements>(
@@ -139,6 +140,7 @@ export function MeasurementDrawer({
   const [fitNotes, setFitNotes] = useState(initialProfile?.notes || '');
   const [referencePhotoDataUrl, setReferencePhotoDataUrl] = useState<string | undefined>(undefined);
   const [referencePhotoName, setReferencePhotoName] = useState<string | undefined>(undefined);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -191,8 +193,27 @@ export function MeasurementDrawer({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setValidationErrors([]);
     setIsSaving(true);
     try {
+      if (user) {
+        const check = await validateMeasurementsOnServer({
+          unit: 'in',
+          measurements: measurementsIn,
+        });
+        if (check && !check.valid) {
+          setValidationErrors(check.errors);
+          return;
+        }
+        if (check?.valid) {
+          const noteSuffix =
+            check.warnings.length > 0 ? ` · Note: ${check.warnings[0]}` : '';
+          showToast(
+            `Measurements verified (~${check.estimatedFabricYards} yards est.)${noteSuffix}`
+          );
+        }
+      }
+
       let profileLabel =
         measurementProfiles.find((p) => p.id === selectedProfileId)?.name || undefined;
 
@@ -478,6 +499,15 @@ export function MeasurementDrawer({
               </div>
             </div>
           </div>
+
+          {validationErrors.length > 0 && (
+            <div className="p-3.5 border border-[#991B1B] bg-[#FEF2F2] text-xs text-[#991B1B] space-y-1">
+              <p className="font-semibold">Please check the following measurement bounds:</p>
+              {validationErrors.map((err) => (
+                <p key={err}>• {err}</p>
+              ))}
+            </div>
+          )}
 
           {/* Sticky Footer Submit */}
           <div className="pt-4 border-t border-[#E4E4E0] flex flex-col sm:flex-row items-center justify-between gap-4">

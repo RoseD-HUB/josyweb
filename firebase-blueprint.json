@@ -52,12 +52,13 @@
     },
     "StoreSettings": {
       "title": "StoreSettings",
-      "description": "Global atelier capacity and split deposit configuration managed by Josy Textile admins.",
+      "description": "Global atelier capacity, whitelist access gate, and split deposit configuration managed by Josy Textile admins.",
       "type": "object",
       "properties": {
         "bespokeCapacityOpen": { "type": "boolean" },
         "splitDepositEnabled": { "type": "boolean" },
         "bespokeLeadWindow": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "whitelistGateEnabled": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["bespokeCapacityOpen", "splitDepositEnabled", "bespokeLeadWindow", "updatedAt"]
@@ -189,6 +190,33 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["grantedBy", "createdAt"]
+    },
+    "WhitelistEntry": {
+      "title": "WhitelistEntry",
+      "description": "Admin-approved email and salted scrypt password hash record authorizing private access to the Josy Textile website.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "minLength": 5, "maxLength": 180 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "active": { "type": "boolean" },
+        "passwordHash": { "type": "string", "minLength": 128, "maxLength": 128, "pattern": "^[a-f0-9]{128}$" },
+        "passwordSalt": { "type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[a-f0-9]{32}$" },
+        "note": { "type": "string", "maxLength": 240 },
+        "addedByUid": { "type": "string", "minLength": 6, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "email",
+        "displayName",
+        "active",
+        "passwordHash",
+        "passwordSalt",
+        "note",
+        "addedByUid",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -198,7 +226,7 @@
     },
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/StoreSettings" },
-      "description": "Publicly readable atelier capacity & split-deposit settings; admin-only writes."
+      "description": "Publicly readable atelier capacity, whitelist gate flag & split-deposit settings; admin-only writes."
     },
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
@@ -223,6 +251,10 @@
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminRecord" },
       "description": "Immutable client-side RBAC admin lookup collection."
+    },
+    "/accessWhitelist/{emailId}": {
+      "schema": { "$ref": "#/entities/WhitelistEntry" },
+      "description": "Admin-managed approved email & salted password hash access whitelist; members can only read their own document."
     }
   }
 }

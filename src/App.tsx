@@ -22,6 +22,7 @@ import { CartCheckoutDrawer } from './components/CartCheckoutDrawer';
 import { PredictiveSearchModal } from './components/PredictiveSearchModal';
 import { SizingPolicyModal } from './components/SizingPolicyModal';
 import { BuyerAuthModal } from './components/BuyerAuthModal';
+import { WhitelistGate } from './components/WhitelistGate';
 import { Footer } from './components/Footer';
 import { ActivePageView } from './types/josy';
 
@@ -46,6 +47,9 @@ function StorefrontShell() {
     isSearchOpen,
     isSizingPolicyOpen,
     isAuthModalOpen,
+    settings,
+    isAdmin,
+    isWhitelistedUser,
   } = useStore();
 
   const closeCurrentPage = () => {
@@ -80,6 +84,11 @@ function StorefrontShell() {
     isSizingPolicyOpen,
     isAuthModalOpen,
   ]);
+
+  const isGateActive = settings.whitelistGateEnabled !== false && !isAdmin && !isWhitelistedUser;
+  if (isGateActive) {
+    return <WhitelistGate />;
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#FAFAFA] text-[#111113]">

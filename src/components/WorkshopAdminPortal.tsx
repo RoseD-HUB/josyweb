@@ -3,10 +3,15 @@ import {
   AlertTriangle,
   ArrowRight,
   CloudUpload,
+  Download,
+  Eye,
+  EyeOff,
   Lock,
   Plus,
   Printer,
   ShieldCheck,
+  Trash2,
+  UserCheck,
 } from 'lucide-react';
 import {
   BESPOKE_PIPELINE,
@@ -18,10 +23,11 @@ import {
   SIZES,
 } from '../data/catalog';
 import { useStore } from '../context/StoreContext';
+import { downloadOrdersCsvFromServer } from '../lib/api';
 import { CategoryCode, FulfillmentMode, Order, SizeCode } from '../types/josy';
 import { TailorJobCardPrintModal } from './TailorJobCardPrintModal';
 
-type WorkshopTab = 'dashboard' | 'queue' | 'catalog';
+type WorkshopTab = 'dashboard' | 'queue' | 'catalog' | 'whitelist';
 
 export function WorkshopAdminPortal() {
   const {
@@ -38,11 +44,27 @@ export function WorkshopAdminPortal() {
     updateStoreSettings,
     seedInitialCatalogToCloud,
     setActivePage,
+    showToast,
+    whitelistEntries,
+    addWhitelistEntry,
+    toggleWhitelistEntryActive,
+    removeWhitelistEntry,
+    workshopTab: tab,
+    setWorkshopTab: setTab,
   } = useStore();
 
-  const [tab, setTab] = useState<WorkshopTab>('dashboard');
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
   const [showNewForm, setShowNewForm] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
+
+  // Access Whitelist Form State
+  const [wlEmail, setWlEmail] = useState('');
+  const [wlName, setWlName] = useState('');
+  const [wlPassword, setWlPassword] = useState('');
+  const [wlNote, setWlNote] = useState('');
+  const [showWlPassword, setShowWlPassword] = useState(false);
+  const [wlFormError, setWlFormError] = useState<string | null>(null);
+  const [wlSubmitting, setWlSubmitting] = useState(false);
 
   // New Product Form State
   const [newName, setNewName] = useState('');
@@ -230,6 +252,7 @@ export function WorkshopAdminPortal() {
             { id: 'dashboard', label: 'Sales & Operations Dashboard' },
             { id: 'queue', label: `Production Queue & Job Cards (${orders.length})` },
             { id: 'catalog', label: `Catalog & S–3XL Inventory (${products.length})` },
+            { id: 'whitelist', label: `Access Whitelist (${whitelistEntries.length})` },
           ] as const
         ).map((t) => (
           <button
@@ -381,6 +404,27 @@ export function WorkshopAdminPortal() {
       {/* Tab 2: Production Queue & Printable Tailor Job Cards */}
       {tab === 'queue' && (
         <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-2">
+            <p className="text-xs text-[#52525B]">
+              {orders.length} order{orders.length === 1 ? '' : 's'} in Isoko Road fulfillment queue
+            </p>
+            <button
+              type="button"
+              disabled={exportingCsv || orders.length === 0}
+              onClick={async () => {
+                setExportingCsv(true);
+                const ok = await downloadOrdersCsvFromServer(orders);
+                setExportingCsv(false);
+                showToast(
+                  ok ? 'Exported Josy Textile Orders CSV report' : 'Unable to export CSV right now.'
+                );
+              }}
+              className="px-4 py-2 border border-[#111113] text-[#111113] text-xs font-medium flex items-center gap-2 hover:bg-[#111113] hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{exportingCsv ? 'Exporting CSV...' : 'Export Orders CSV'}</span>
+            </button>
+          </div>
           {orders.map((order) => {
             const canAdvanceRtw =
               order.rtwStage && RTW_PIPELINE.indexOf(order.rtwStage) < RTW_PIPELINE.length - 1;
@@ -611,6 +655,211 @@ export function WorkshopAdminPortal() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 4: Email & Password Website Access Whitelist */}
+      {tab === 'whitelist' && (
+        <div className="space-y-8">
+          {/* Gate Toggle Card */}
+          <div className="bg-white border border-[#E4E4E0] p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <p className="text-xs font-mono uppercase tracking-wider text-[#B48436] flex items-center gap-1.5">
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>Private Access Control</span>
+              </p>
+              <h2 className="font-editorial text-2xl font-medium text-[#111113]">
+                Website Whitelist Access Gate
+              </h2>
+              <p className="text-xs text-[#52525B] max-w-2xl">
+                When enabled, only approved emails and passwords listed below (plus your verified Studio Admin account) can enter Josy Textile. Passwords are salted and hashed on the server before saving.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                void updateStoreSettings({
+                  whitelistGateEnabled: settings.whitelistGateEnabled === false,
+                })
+              }
+              className={`px-5 py-2.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                settings.whitelistGateEnabled !== false
+                  ? 'bg-[#1B365D] text-white hover:bg-[#111113]'
+                  : 'bg-[#F4F4F5] text-[#52525B] border border-[#D4D4D8] hover:border-[#111113]'
+              }`}
+            >
+              {settings.whitelistGateEnabled !== false
+                ? 'Gate Active (Whitelist Only)'
+                : 'Gate Off (Public Website)'}
+            </button>
+          </div>
+
+          {/* Add Approved Email & Password Form */}
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setWlFormError(null);
+              setWlSubmitting(true);
+              try {
+                const res = await addWhitelistEntry({
+                  email: wlEmail,
+                  displayName: wlName,
+                  password: wlPassword,
+                  note: wlNote,
+                });
+                if (!res.ok) {
+                  setWlFormError(res.error || 'Could not add email to whitelist.');
+                } else {
+                  setWlEmail('');
+                  setWlName('');
+                  setWlPassword('');
+                  setWlNote('');
+                }
+              } finally {
+                setWlSubmitting(false);
+              }
+            }}
+            className="bg-white border border-[#E4E4E0] p-6 space-y-4"
+          >
+            <div>
+              <h3 className="font-editorial text-2xl font-medium text-[#111113]">
+                Add Approved Email &amp; Password
+              </h3>
+              <p className="text-xs text-[#71717A] mt-0.5">
+                Share the assigned email and password with the approved person—they can sign in immediately on the website access gate.
+              </p>
+            </div>
+
+            {wlFormError && (
+              <div className="p-3 border border-[#991B1B] bg-[#FEF2F2] text-xs text-[#991B1B]">
+                {wlFormError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <input
+                type="email"
+                required
+                maxLength={180}
+                value={wlEmail}
+                onChange={(e) => setWlEmail(e.target.value)}
+                placeholder="Approved Email (e.g. client@gmail.com)"
+                className="border border-[#D4D4D8] px-3 py-2.5 text-sm focus:outline-none focus:border-[#111113]"
+              />
+              <input
+                type="text"
+                required
+                maxLength={120}
+                value={wlName}
+                onChange={(e) => setWlName(e.target.value)}
+                placeholder="Member Name / Label"
+                className="border border-[#D4D4D8] px-3 py-2.5 text-sm focus:outline-none focus:border-[#111113]"
+              />
+              <div className="relative">
+                <input
+                  type={showWlPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  maxLength={128}
+                  value={wlPassword}
+                  onChange={(e) => setWlPassword(e.target.value)}
+                  placeholder="Assigned Password (min 6 chars)"
+                  className="w-full border border-[#D4D4D8] px-3 py-2.5 pr-10 text-sm focus:outline-none focus:border-[#111113]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowWlPassword((p) => !p)}
+                  aria-label={showWlPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#71717A] hover:text-[#111113] cursor-pointer"
+                >
+                  {showWlPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <input
+                type="text"
+                maxLength={240}
+                value={wlNote}
+                onChange={(e) => setWlNote(e.target.value)}
+                placeholder="Optional Note (e.g. VIP Client, Staff)"
+                className="border border-[#D4D4D8] px-3 py-2.5 text-sm focus:outline-none focus:border-[#111113]"
+              />
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={wlSubmitting}
+                className="px-6 py-2.5 bg-[#111113] text-white text-xs font-medium tracking-wider uppercase hover:bg-[#1B365D] transition-colors disabled:opacity-60 flex items-center gap-2 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{wlSubmitting ? 'Hashing & Saving...' : 'Add to Whitelist'}</span>
+              </button>
+            </div>
+          </form>
+
+          {/* Approved Members Table */}
+          <div className="bg-white border border-[#E4E4E0] overflow-x-auto">
+            {whitelistEntries.length === 0 ? (
+              <div className="p-10 text-center space-y-2">
+                <Lock className="w-7 h-7 text-[#A1A1AA] mx-auto" />
+                <p className="font-editorial text-2xl text-[#111113]">No whitelisted members yet</p>
+                <p className="text-xs text-[#71717A]">
+                  Use the form above to approve emails and assign access passwords. Your Studio Admin account always has access.
+                </p>
+              </div>
+            ) : (
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E4E4E0] bg-[#FAFAFA] text-[#71717A]">
+                    <th className="p-4 font-medium">Approved Email</th>
+                    <th className="p-4 font-medium">Member Name</th>
+                    <th className="p-4 font-medium">Note</th>
+                    <th className="p-4 font-medium">Status</th>
+                    <th className="p-4 font-medium text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#F4F4F5]">
+                  {whitelistEntries.map((entry) => (
+                    <tr key={entry.email}>
+                      <td className="p-4 font-mono text-[#111113]">{entry.email}</td>
+                      <td className="p-4 font-medium text-[#111113]">{entry.displayName}</td>
+                      <td className="p-4 text-[#52525B]">{entry.note || '—'}</td>
+                      <td className="p-4 font-mono">
+                        <span
+                          className={
+                            entry.active ? 'text-[#1B365D] font-semibold' : 'text-[#991B1B]'
+                          }
+                        >
+                          {entry.active ? 'Active' : 'Revoked'}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <div className="inline-flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void toggleWhitelistEntryActive(entry.email, !entry.active)
+                            }
+                            className="px-3 py-1.5 border border-[#D4D4D8] text-[#111113] hover:border-[#111113] transition-colors cursor-pointer"
+                          >
+                            {entry.active ? 'Revoke' : 'Restore'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void removeWhitelistEntry(entry.email)}
+                            aria-label={`Remove ${entry.email} from whitelist`}
+                            className="p-1.5 border border-[#E4E4E0] text-[#71717A] hover:text-[#991B1B] hover:border-[#991B1B] transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

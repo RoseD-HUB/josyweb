@@ -128,6 +128,7 @@ export interface ShippingZone {
 export type PaymentPlan = 'FULL_UPFRONT' | 'SPLIT_DEPOSIT_60_40';
 
 export type PaymentGateway =
+  | 'Payment Pending (Studio Confirmation)'
   | 'Paystack (NGN Cards / Transfer / USSD)'
   | 'Flutterwave Nigeria (NGN)'
   | 'Stripe Global (Cards / Apple Pay)'
@@ -182,4 +183,18 @@ export interface StoreSettings {
   bespokeCapacityOpen: boolean;
   splitDepositEnabled: boolean;
   bespokeLeadWindow: string;
+  whitelistGateEnabled?: boolean;
 }
+
+export interface WhitelistEntry {
+  email: string;
+  displayName: string;
+  active: boolean;
+  passwordHash: string;
+  passwordSalt: string;
+  note: string;
+  addedByUid: string;
+  createdAt: string;
+  updatedAt: string;
+}
+

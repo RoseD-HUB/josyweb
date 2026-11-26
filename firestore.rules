@@ -103,10 +103,38 @@ service cloud.firestore {
 
     function isValidStoreSettings(data) {
       return data.keys().hasAll(['bespokeCapacityOpen', 'splitDepositEnabled', 'bespokeLeadWindow', 'updatedAt'])
-        && data.keys().hasOnly(['bespokeCapacityOpen', 'splitDepositEnabled', 'bespokeLeadWindow', 'updatedAt'])
+        && data.keys().hasOnly(['bespokeCapacityOpen', 'splitDepositEnabled', 'bespokeLeadWindow', 'whitelistGateEnabled', 'updatedAt'])
         && data.bespokeCapacityOpen is bool
         && data.splitDepositEnabled is bool
         && data.bespokeLeadWindow is string && data.bespokeLeadWindow.size() >= 3 && data.bespokeLeadWindow.size() <= 80
+        && (!('whitelistGateEnabled' in data) || data.whitelistGateEnabled is bool)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWhitelistEmailId(id) {
+      return id is string
+        && id.size() >= 5
+        && id.size() <= 180
+        && id.matches('^[a-z0-9._+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$');
+    }
+
+    function isValidWhitelistEntry(data, emailId) {
+      return data.keys().hasAll([
+          'email', 'displayName', 'active', 'passwordHash', 'passwordSalt',
+          'note', 'addedByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'email', 'displayName', 'active', 'passwordHash', 'passwordSalt',
+          'note', 'addedByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.email is string && data.email == emailId
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.active is bool
+        && data.passwordHash is string && data.passwordHash.size() == 128 && data.passwordHash.matches('^[a-f0-9]{128}$')
+        && data.passwordSalt is string && data.passwordSalt.size() == 32 && data.passwordSalt.matches('^[a-f0-9]{32}$')
+        && data.note is string && data.note.size() <= 240
+        && isValidId(data.addedByUid)
+        && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
 
@@ -374,6 +402,26 @@ service cloud.firestore {
     match /admins/{adminUid} {
       allow get: if isValidId(adminUid) && isSignedIn() && request.auth.uid == adminUid;
       allow write: if false;
+    }
+
+    // 8. Email & Password Access Whitelist (Admin-managed; signed-in members can only verify their own email)
+    match /accessWhitelist/{emailId} {
+      allow get: if isValidWhitelistEmailId(emailId)
+        && (isAdmin() || (isSignedIn() && request.auth.token.email != null && request.auth.token.email.lower() == emailId));
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidWhitelistEmailId(emailId)
+        && isValidWhitelistEntry(incoming(), emailId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidWhitelistEmailId(emailId)
+        && isValidWhitelistEntry(incoming(), emailId)
+        && incoming().email == existing().email
+        && incoming().addedByUid == existing().addedByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidWhitelistEmailId(emailId);
     }
   }
 }

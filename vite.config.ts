@@ -9,6 +9,18 @@ export default defineConfig(() => {
     plugins: [
       react(),
       tailwindcss(),
+      // Dev-only CSP relaxation for Vite React Fast Refresh inline preamble;
+      // production builds keep the strict script-src without 'unsafe-inline'.
+      {
+        name: 'dev-csp-vite-preamble',
+        apply: 'serve',
+        transformIndexHtml(html: string): string {
+          return html.replace(
+            "script-src 'self' https://apis.google.com",
+            "script-src 'self' 'unsafe-inline' https://apis.google.com"
+          );
+        },
+      },
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds. Do not remove.
